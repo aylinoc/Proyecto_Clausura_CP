@@ -1,0 +1,30 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "cppbuild",
+            "label": "MPI: compilar con mpicxx",
+            "command": "/opt/homebrew/bin/mpicxx",
+            "args": [
+                "-std=c++17", // <--- ESTA ES LA LÍNEA CLAVE
+                "-fdiagnostics-color=always",
+                "${file}",
+                "-o",
+                "${fileDirname}/${fileBasenameNoExtension}",
+                "-isysroot",
+                "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Usa OpenMPI de Homebrew con el SDK de macOS"
+        }
+    ]
+}
