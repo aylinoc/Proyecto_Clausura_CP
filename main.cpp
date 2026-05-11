@@ -158,6 +158,8 @@ int main(int argc, char** argv) {
 
     if (rank == 0) {
         cout << "--- INICIANDO FASE PARALELA CON " << size << " PROCESOS ---" << endl;
+
+        vector<map<string, int>> conteosParalelos;
         
         // Repartir libros a trabajadores (Rank 1 en adelante)
         for (int i = 1; i < size && i <= (int)nombresArchivos.size(); i++) {
@@ -169,7 +171,7 @@ int main(int argc, char** argv) {
 
         // Recolectar resultados
         for (int i = 1; i < size && i <= (int)nombresArchivos.size(); i++) {
-            recibirMapa(i); // El maestro recibe pero no procesa mas para el tiempo puro
+            conteosParalelos.push_back(recibirMapa(i));
         }
         
         double t_par_fin = MPI_Wtime();
@@ -186,6 +188,35 @@ int main(int argc, char** argv) {
             cout << "Eficiencia:      " << (speedup / (size - 1)) * 100 << "%" << endl;
         }
         cout << "========================================\n" << endl;
+
+        // --- GENERACIÓN DEL ARCHIVO PARALELO (Fuera del tiempo) ---
+        cout << "Generando bolsa_paralela.csv..." << endl;
+        
+        // Creamos un vocabulario global para el paralelo
+        set<string> vocabularioParalelo;
+        for (const auto& mapa : conteosParalelos) {
+            for (auto const& [palabra, cant] : mapa) {
+                vocabularioParalelo.insert(palabra);
+            }
+        }
+
+        ofstream archivoPar("bolsa_paralela.csv");
+        unsigned char bom[] = {0xEF, 0xBB, 0xBF}; 
+        archivoPar.write((char*)bom, sizeof(bom));
+        
+        archivoPar << "Libro";
+        for (const string& p : vocabularioParalelo) archivoPar << "," << p;
+        archivoPar << "\n";
+
+        for (size_t i = 0; i < conteosParalelos.size(); ++i) {
+            archivoPar << nombresArchivos[i];
+            for (const string& p : vocabularioParalelo) {
+                archivoPar << "," << conteosParalelos[i][p];
+            }
+            archivoPar << "\n";
+        }
+        archivoPar.close();
+        cout << "¡Archivo 'bolsa_paralela.csv' listo para comparar!" << endl;
 
     } else {
         // TRABAJADORES
