@@ -7,6 +7,7 @@
 #include <chrono> 
 #include <set>
 #include <mpi.h>
+#include <unordered_map>
 
 using namespace std;
 
@@ -17,12 +18,12 @@ string limpiarTexto(string texto) {
         texto[i] = tolower((unsigned char)texto[i]);
     }
     // Regex que respeta ñ y acentos
-    regex pattern("[^a-zñáéíóú\\s]"); 
+    static const regex pattern("[^a-zñáéíóú\\s]"); 
     return regex_replace(texto, pattern, "");
 }
 
-map<string, int> contarPalabras(string nombreArchivo) {
-    map<string, int> frecuencias;
+unordered_map<string, int> contarPalabras(string nombreArchivo) {
+    unordered_map<string, int> frecuencias;
     ifstream archivo(nombreArchivo);
     string palabra;
 
@@ -41,8 +42,42 @@ map<string, int> contarPalabras(string nombreArchivo) {
     return frecuencias;
 }
 
+/* --- FUNCIONES MPI --- */
+
+void enviarMapa(unordered_map<string, int>& conteo, int destino) {
+    int tam = (int)conteo.size();
+    MPI_Send(&tam, 1, MPI_INT, destino, 0, MPI_COMM_WORLD);
+    for (auto const& [palabra, cantidad] : conteo) {
+        int len = (int)palabra.length();
+        MPI_Send(&len, 1, MPI_INT, destino, 1, MPI_COMM_WORLD);
+        MPI_Send(palabra.c_str(), len, MPI_CHAR, destino, 2, MPI_COMM_WORLD);
+        MPI_Send(&cantidad, 1, MPI_INT, destino, 3, MPI_COMM_WORLD);
+    }
+}
+
+unordered_map<string, int> recibirMapa(int origen) {
+    unordered_map<string, int> conteo;
+    int tam;
+    MPI_Status status;
+
+    MPI_Recv(&tam, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
+    origen = status.MPI_SOURCE;
+    for (int i = 0; i < tam; i++) {
+        int len, cantidad;
+        MPI_Recv(&len, 1, MPI_INT, origen, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        char* buffer = new char[len + 1];
+        MPI_Recv(buffer, len, MPI_CHAR, origen, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        buffer[len] = '\0';
+        MPI_Recv(&cantidad, 1, MPI_INT, origen, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        conteo[string(buffer)] = cantidad;
+        delete[] buffer;
+    }
+    return conteo;
+}
+
 void descargarLibro(string url, string nombreArchivo) {
-    string comando = "curl -s -L " + url + " -o " + nombreArchivo;
+    string ruta = "Libros/" + nombreArchivo;
+    string comando = "curl -s -L " + url + " -o " + ruta;
     cout << "Descargando: " << nombreArchivo << "..." << endl;
     system(comando.c_str());
 }
@@ -53,11 +88,11 @@ void ejecutarVersionSerial(const vector<string>& libros, double &tiempoSerialRef
     cout << "--- INICIANDO FASE SERIAL ---" << endl;
     auto inicio = chrono::high_resolution_clock::now();
 
-    vector<map<string, int>> todosLosConteos; 
+    vector<unordered_map<string, int>> todosLosConteos; 
     set<string> vocabularioGlobal;
 
     for (const string& libro : libros) {
-        map<string, int> conteoLibro = contarPalabras(libro);
+        unordered_map<string, int> conteoLibro = contarPalabras(libro);
         todosLosConteos.push_back(conteoLibro);
         for (auto const& [palabra, cantidad] : conteoLibro) {
             vocabularioGlobal.insert(palabra);
@@ -71,7 +106,7 @@ void ejecutarVersionSerial(const vector<string>& libros, double &tiempoSerialRef
     
     cout << "Procesamiento Serial: " << tiempoSerialReferencia << " s" << endl;
 
-    ofstream archivoSalida("bolsa_serial.csv");
+    ofstream archivoSalida("Resultados/bolsa_serial.csv");
     unsigned char bom[] = {0xEF, 0xBB, 0xBF}; 
     archivoSalida.write((char*)bom, sizeof(bom));
     
@@ -89,35 +124,7 @@ void ejecutarVersionSerial(const vector<string>& libros, double &tiempoSerialRef
     archivoSalida.close();
 }
 
-/* --- FUNCIONES MPI --- */
 
-void enviarMapa(map<string, int>& conteo, int destino) {
-    int tam = (int)conteo.size();
-    MPI_Send(&tam, 1, MPI_INT, destino, 0, MPI_COMM_WORLD);
-    for (auto const& [palabra, cantidad] : conteo) {
-        int len = (int)palabra.length();
-        MPI_Send(&len, 1, MPI_INT, destino, 1, MPI_COMM_WORLD);
-        MPI_Send(palabra.c_str(), len, MPI_CHAR, destino, 2, MPI_COMM_WORLD);
-        MPI_Send(&cantidad, 1, MPI_INT, destino, 3, MPI_COMM_WORLD);
-    }
-}
-
-map<string, int> recibirMapa(int origen) {
-    map<string, int> conteo;
-    int tam;
-    MPI_Recv(&tam, 1, MPI_INT, origen, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    for (int i = 0; i < tam; i++) {
-        int len, cantidad;
-        MPI_Recv(&len, 1, MPI_INT, origen, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        char* buffer = new char[len + 1];
-        MPI_Recv(buffer, len, MPI_CHAR, origen, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        buffer[len] = '\0';
-        MPI_Recv(&cantidad, 1, MPI_INT, origen, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        conteo[string(buffer)] = cantidad;
-        delete[] buffer;
-    }
-    return conteo;
-}
 
 /* --- MAIN --- */
 
@@ -137,7 +144,7 @@ int main(int argc, char** argv) {
     };
 
     vector<string> nombresArchivos;
-    for(auto const& f : fuentes) nombresArchivos.push_back(f.second);
+    for(auto const& f : fuentes) nombresArchivos.push_back("Libros/" + f.second);
 
     double tiempoSerial = 0.0;
 
@@ -159,19 +166,52 @@ int main(int argc, char** argv) {
     if (rank == 0) {
         cout << "--- INICIANDO FASE PARALELA CON " << size << " PROCESOS ---" << endl;
 
-        vector<map<string, int>> conteosParalelos;
-        
+        vector<unordered_map<string, int>> conteosParalelos;
+        int librosEnviados = 0;
+        int librosRecibidos = 0;
+        int numLibros = (int)nombresArchivos.size();
+
         // Repartir libros a trabajadores (Rank 1 en adelante)
-        for (int i = 1; i < size && i <= (int)nombresArchivos.size(); i++) {
-            string nombre = nombresArchivos[i-1];
-            int len = (int)nombre.length();
-            MPI_Send(&len, 1, MPI_INT, i, 10, MPI_COMM_WORLD);
-            MPI_Send(nombre.c_str(), len, MPI_CHAR, i, 11, MPI_COMM_WORLD);
+                for (int i = 1; i < size && librosEnviados < numLibros; i++) {
+                    string nombre = nombresArchivos[librosEnviados++];
+                    int len = (int)nombre.length();
+                    MPI_Send(&len, 1, MPI_INT, i, 10, MPI_COMM_WORLD);
+                    MPI_Send(nombre.c_str(), len, MPI_CHAR, i, 11, MPI_COMM_WORLD);
+                }
+
+        bool maestroTrabajando = false;
+        unordered_map<string, int> conteoMaestro;
+        if (librosEnviados < numLibros) {
+            string miRuta = nombresArchivos[librosEnviados++];
+            cout << "Maestro aprovechando tiempo extra con: " << miRuta << endl;
+            conteoMaestro = contarPalabras(miRuta);
+            maestroTrabajando = true;
+            librosRecibidos++;
         }
 
-        // Recolectar resultados
-        for (int i = 1; i < size && i <= (int)nombresArchivos.size(); i++) {
-            conteosParalelos.push_back(recibirMapa(i));
+        // --- ESCUCHA DINÁMICA ---
+        while (librosRecibidos < numLibros) {
+            int trabajadorLibre;
+            conteosParalelos.push_back(recibirMapa(trabajadorLibre));
+            librosRecibidos++;
+
+            // Si aún quedan libros, le mandamos otro al que acaba de terminar
+            if (librosEnviados < numLibros) {
+                string ruta = nombresArchivos[librosEnviados++];
+                int len = (int)ruta.length();
+                MPI_Send(&len, 1, MPI_INT, trabajadorLibre, 10, MPI_COMM_WORLD);
+                MPI_Send(ruta.c_str(), len, MPI_CHAR, trabajadorLibre, 11, MPI_COMM_WORLD);
+            }
+        }
+
+        // Agregar el conteo del maestro al final si es que trabajó
+        if(maestroTrabajando) conteosParalelos.push_back(conteoMaestro);
+
+        // --- SEÑAL DE FIN ---
+        // Mandamos un -1 para que los trabajadores salgan de su ciclo while
+        for (int i = 1; i < size; i++) {
+            int fin = -1;
+            MPI_Send(&fin, 1, MPI_INT, i, 10, MPI_COMM_WORLD);
         }
         
         double t_par_fin = MPI_Wtime();
@@ -200,7 +240,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        ofstream archivoPar("bolsa_paralela.csv");
+        ofstream archivoPar("Resultados/bolsa_paralela.csv");
         unsigned char bom[] = {0xEF, 0xBB, 0xBF}; 
         archivoPar.write((char*)bom, sizeof(bom));
         
@@ -219,15 +259,18 @@ int main(int argc, char** argv) {
         cout << "¡Archivo 'bolsa_paralela.csv' listo para comparar!" << endl;
 
     } else {
-        // TRABAJADORES
-        if (rank <= (int)nombresArchivos.size()) {
+        // --- CICLO DEL TRABAJADOR ---
+        while (true) {
             int len;
             MPI_Recv(&len, 1, MPI_INT, 0, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+            if (len == -1) break; // Recibió señal de que ya no hay más libros
+
             char* buffer = new char[len + 1];
             MPI_Recv(buffer, len, MPI_CHAR, 0, 11, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             buffer[len] = '\0';
 
-            map<string, int> miConteo = contarPalabras(string(buffer));
+            unordered_map<string, int> miConteo = contarPalabras(string(buffer));
             enviarMapa(miConteo, 0);
             delete[] buffer;
         }
