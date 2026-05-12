@@ -1,39 +1,46 @@
 #include <iostream>
-#include <fstream>
+#include <fstream>        // Para el manejo de archivos de entrada/salida
 #include <string>
 #include <vector>
-#include <map>
-#include <regex>
+#include <map>            // Para el mapa ordenado final
+#include <regex>          // Para la limpieza de texto con expresiones regulares
 #include <chrono>
-#include <set>
-#include <sstream>
+#include <set>            // Para gestionar el vocabulario único global
+#include <sstream>        // Para la deserialización de strings (istringstream)
 #include <mpi.h>
-#include <unordered_map>
-#include <algorithm>
+#include <unordered_map>  // Para conteo rápido (Hash Table O(1))
+#include <algorithm>      // Para el ordenamiento de resultados finales
 
 using namespace std;
 
-/* --- FUNCIONES GLOBALES --- */
 
+//FUNCIONES GLOBALES 
+
+// Funcion de limpieza: Normaliza cada palabra antes de contarla. 
+//Se pasa todo a minúsculas y se eliminan signos, números u otros caracteres que no aportan al conteo de palabras.
 string limpiarTexto(string texto) {
     for (int i = 0; i < (int)texto.length(); i++) {
         texto[i] = tolower((unsigned char)texto[i]);
     }
+    // Se conservan letras normales, acentos, ñ y espacios.
     static const regex pattern("[^a-zñáéíóú\\s]");
     return regex_replace(texto, pattern, "");
 }
 
-// unordered_map para conteo rápido O(1)
+// Función de conteo: Lee un archivo completo y cuenta cuántas veces aparece cada palaba
+// Se usa unordered_mao porque permite actualizar el conteo de forma rápida
 unordered_map<string, int> contarPalabras(string nombreArchivo) {
     unordered_map<string, int> frecuencias;
     ifstream archivo(nombreArchivo);
     string palabra;
 
+    // Si el archivo no existe o no se pudo abrir, regresa el mapa vacío
     if (!archivo.is_open()) {
         cerr << "Error al abrir: " << nombreArchivo << endl;
         return frecuencias;
     }
 
+    // Lee palabra por palabra separando espacios
     while (archivo >> palabra) {
         palabra = limpiarTexto(palabra);
         if (!palabra.empty()) {
@@ -44,6 +51,7 @@ unordered_map<string, int> contarPalabras(string nombreArchivo) {
     return frecuencias;
 }
 
+// Función para descargar los libros: Baja los libros desde Project Gutenberg y los guarda en la carpeta Libros
 void descargarLibro(string url, string nombreArchivo) {
     string ruta    = "Libros/" + nombreArchivo;
     string comando = "curl -s -L " + url + " -o " + ruta;
@@ -51,40 +59,46 @@ void descargarLibro(string url, string nombreArchivo) {
     system(comando.c_str());
 }
 
-/* --- FUNCIONES MPI ---
-   Todo el mapa se serializa en UN string "palabra:cantidad\n"
-   y se manda en 2 mensajes en lugar de 4 por palabra. */
 
+// FUNCION PARA MPI - PARTE PARALELA
+
+// Serializa el mapa: Convierte la estructura de datos en un flujo de bytes (string)
 void enviarMapa(unordered_map<string, int>& conteo, int destino) {
     string serializado;
     for (auto const& [palabra, cantidad] : conteo) {
+        // Formato simple para enviar todo el mapa: "palabra:cantidad\n"
         serializado += palabra + ":" + to_string(cantidad) + "\n";
     }
     int len = (int)serializado.size();
+    // Paso 1: Enviar metadato (tamaño del string) para que el receptor prepare su buffer
     MPI_Send(&len, 1, MPI_INT, destino, 0, MPI_COMM_WORLD);
+    // Paso 2: Enviar el contenido real (el string serializado)
     MPI_Send(serializado.c_str(), len, MPI_CHAR, destino, 1, MPI_COMM_WORLD);
 }
 
 
-
-/* --- VERSIÓN SERIAL --- */
+// FUNCIÓN PARA IMPLEMENTAR LA VERSIÓN SERIAL
 
 void ejecutarVersionSerial(const vector<string>& libros, double& tiempoSerialReferencia) {
-    cout << "--- INICIANDO FASE SERIAL ---" << endl;
+    cout << "Iniciando versión serial" << endl;
     auto inicio = chrono::high_resolution_clock::now();
 
+    // Guarda el conteo de cada libro por separado
     vector<unordered_map<string, int>> todosLosConteos;
     set<string> vocabularioGlobal;
 
+    // Se procesa cada libro uno por uno
     for (const string& libro : libros) {
+        // Para cada libro crea un mapa con sus conteos
         unordered_map<string, int> conteoLibro = contarPalabras(libro);
         todosLosConteos.push_back(conteoLibro);
+        // Cada palabra encontrada se agrega al vocabulario general
         for (auto const& [palabra, cantidad] : conteoLibro) {
             vocabularioGlobal.insert(palabra);
         }
     }
 
-    // Cronómetro se detiene ANTES de escribir el CSV (Ley de Amdahl)
+    // Detenemos la medición del tiempo, para qur corresponda solo al procesamiento del texto (por Ley de Amhdal)
     auto fin = chrono::high_resolution_clock::now();
     chrono::duration<double> tiempo = fin - inicio;
     tiempoSerialReferencia = tiempo.count();
@@ -92,6 +106,7 @@ void ejecutarVersionSerial(const vector<string>& libros, double& tiempoSerialRef
     cout << "Procesamiento Serial: " << tiempoSerialReferencia << " s" << endl;
 
     ofstream archivoSalida("Resultados/bolsa_serial.csv");
+    // Para que Excel abra correctamente los caracteres con acentos y ñ
     unsigned char bom[] = {0xEF, 0xBB, 0xBF};
     archivoSalida.write((char*)bom, sizeof(bom));
 
@@ -99,11 +114,12 @@ void ejecutarVersionSerial(const vector<string>& libros, double& tiempoSerialRef
     for (const string& palabra : vocabularioGlobal) archivoSalida << "," << palabra;
     archivoSalida << "\n";
 
+    // Cada fila representa un libro y cada columna la frecuencia de una palabra
     for (size_t i = 0; i < libros.size(); ++i) {
-        // Quitar prefijo "Libros/" para que el CSV muestre solo el nombre del archivo
         string nombreCorto = libros[i];
         size_t slash = nombreCorto.rfind('/');
         if (slash != string::npos) nombreCorto = nombreCorto.substr(slash + 1);
+
         archivoSalida << nombreCorto;
         for (const string& palabra : vocabularioGlobal) {
             archivoSalida << "," << todosLosConteos[i][palabra];
@@ -113,14 +129,16 @@ void ejecutarVersionSerial(const vector<string>& libros, double& tiempoSerialRef
     archivoSalida.close();
 }
 
-/* --- MAIN --- */
+// MAIN 
 
 int main(int argc, char** argv) {
+    // Inicia el entorno de ejecución paralelo
     MPI_Init(&argc, &argv);
     int rank, size;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank); // ID del proceso actual
+    MPI_Comm_size(MPI_COMM_WORLD, &size); // Total de procesos lanzados
 
+    // Lista de libros a descargar y procesar
     vector<pair<string, string>> fuentes = {
         {"https://www.gutenberg.org/cache/epub/2000/pg2000.txt", "quijote.txt"},
         {"https://www.gutenberg.org/cache/epub/1342/pg1342.txt", "orgullo.txt"},
@@ -139,21 +157,23 @@ int main(int argc, char** argv) {
 
     double tiempoSerial = 0.0;
 
+    // El proceso 0 actua como maestro, solo el descarga los libros y ejecuta la versión serial
     if (rank == 0) {
         for (auto const& f : fuentes) descargarLibro(f.first, f.second);
         ejecutarVersionSerial(nombresArchivos, tiempoSerial);
-        cout << "--- FASE SERIAL FINALIZADA ---\n" << endl;
+        cout << "Fase serial finalizada\n" << endl;
     }
 
+    // Barrera de sincronización: Todos los procesos esperen aquí hasta que el maestro termine la fase serial
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // ── FASE PARALELA ─────────────────────────────────────────────────────────
+    // FASE PARALELA
     double t_par_inicio = MPI_Wtime();
 
     if (rank == 0) {
-        cout << "--- INICIANDO FASE PARALELA CON " << size << " PROCESOS ---" << endl;
+        cout << "Iniciando fase paralela con " << size << " procesos" << endl;
 
-        // Par (nombre del libro, conteo) para mantener la correspondencia correcta
+        // Se guarda el nombre del libro junto con su conteo
         vector<pair<string, map<string, int>>> conteosParalelos;
 
         int librosEnviados  = 0;
@@ -163,46 +183,51 @@ int main(int argc, char** argv) {
         // Registra qué libro tiene asignado cada worker en este momento
         map<int, string> libroDeWorker;
 
-        // Primera ronda: un libro por worker
+        // Distribución inicial: El maestro asigna un libro a cada proceso disponible
         for (int i = 1; i < size && librosEnviados < numLibros; i++) {
             string nombre = nombresArchivos[librosEnviados];
             libroDeWorker[i] = nombre; // registrar asignación
             librosEnviados++;
             int len = (int)nombre.length();
+
+            // Se manda primero la longitud de la ruta y luego la ruta como texto
+            // Tags 10 y 11 usados específicamente para instrucciones de control (Nombres de archivos)
             MPI_Send(&len,           1,   MPI_INT,  i, 10, MPI_COMM_WORLD);
             MPI_Send(nombre.c_str(), len, MPI_CHAR, i, 11, MPI_COMM_WORLD);
         }
 
-        // El maestro procesa un libro extra si sobran
+        // El maestro también puede trabajar si todavía quedan libros sin asignar
         bool maestroTrabajando = false;
         map<string, int> conteoMaestro;
         string libroMaestro;
+
         if (librosEnviados < numLibros) {
             libroMaestro = nombresArchivos[librosEnviados++];
             cout << "Maestro procesando: " << libroMaestro << endl;
+
             unordered_map<string, int> tmp = contarPalabras(libroMaestro);
             conteoMaestro = map<string, int>(tmp.begin(), tmp.end());
+
             maestroTrabajando = true;
             librosRecibidos++;
         }
 
-        // Escucha dinámica: recibe de cualquier worker con MPI_ANY_SOURCE
+        // Bucle de Escucha Dinámica
         while (librosRecibidos < numLibros) {
             MPI_Status status;
 
-            // Recibir tamaño desde cualquier worker que haya terminado
             int len;
+            // Recibe de CUALQUIER proceso que haya terminado (el primero que llegue)
             MPI_Recv(&len, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
-
-            // Saber exactamente quién terminó
+            // Con status se identifica cuál worker fue el que terminó
             int trabajadorLibre = status.MPI_SOURCE;
 
-            // Recibir el contenido del mapa
+            // Recibe el string serializado con el conteo del libro
             vector<char> buffer(len + 1);
             MPI_Recv(buffer.data(), len, MPI_CHAR, trabajadorLibre, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             buffer[len] = '\0';
 
-            // Deserializar "palabra:cantidad\n"
+            // Deserialización: Reconstruye el mapa a partir del string recibido y líneas tipo "palabra:cantidad"
             map<string, int> conteo;
             istringstream ss(string(buffer.data(), len));
             string linea;
@@ -214,11 +239,11 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Guardar con el nombre correcto del libro (no asumir orden)
+            // Se guarda el resultado con el nombre del libro que tenía asignado ese worker
             conteosParalelos.push_back({libroDeWorker[trabajadorLibre], conteo});
             librosRecibidos++;
 
-            // Si quedan libros, asignar otro al worker que quedó libre
+            // Reasignación Inmediata: Si hay más libros,se aprovecha el worker que queda libre.
             if (librosEnviados < numLibros) {
                 string ruta = nombresArchivos[librosEnviados];
                 libroDeWorker[trabajadorLibre] = ruta; // actualizar asignación
@@ -229,12 +254,12 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Agregar conteo del maestro si trabajó
+        // Si el maestro también procesó un libro, también se agrega a los resultados
         if (maestroTrabajando) {
             conteosParalelos.push_back({libroMaestro, conteoMaestro});
         }
 
-        // Ordenar para que queden en el mismo orden que nombresArchivos (igual que el serial)
+        // Ordenar para que queden en orden alfabetico
         sort(conteosParalelos.begin(), conteosParalelos.end(),
             [&nombresArchivos](const pair<string, map<string,int>>& a,
                                const pair<string, map<string,int>>& b) {
@@ -243,70 +268,69 @@ int main(int argc, char** argv) {
                 return posA < posB;
             });
 
-        // Señal de fin a todos los workers
+        // Finalización: Envía (len = -1) a cada worker como señal de muerte
         for (int i = 1; i < size; i++) {
             int fin = -1;
             MPI_Send(&fin, 1, MPI_INT, i, 10, MPI_COMM_WORLD);
         }
 
-        double t_par_fin      = MPI_Wtime();
+        // Detiene la medición del tiempo y calcula el tiempo total de la parte paralela
+        double t_par_fin     = MPI_Wtime();
         double tiempoParalelo = t_par_fin - t_par_inicio;
 
-        cout << "\n========================================" << endl;
+        // Generar CSV paralelo 
+                set<string> vocabularioParalelo;
+                for (const auto& [nombre, mapa] : conteosParalelos)
+                    for (auto const& [palabra, cant] : mapa)
+                        vocabularioParalelo.insert(palabra);
+
+                ofstream archivoPar("Resultados/bolsa_paralela.csv");
+                unsigned char bom[] = {0xEF, 0xBB, 0xBF};
+                archivoPar.write((char*)bom, sizeof(bom));
+
+                archivoPar << "Libro";
+                for (const string& p : vocabularioParalelo) archivoPar << "," << p;
+                archivoPar << "\n";
+
+                // Se escribe una fila por libro
+                for (const auto& [nombre, mapa] : conteosParalelos) {
+                    string nombreCorto = nombre;
+                    size_t slash = nombreCorto.rfind('/');
+                    if (slash != string::npos) nombreCorto = nombreCorto.substr(slash + 1);
+                    archivoPar << nombreCorto;
+                    for (const string& p : vocabularioParalelo) {
+                        auto it = mapa.find(p);
+                        archivoPar << "," << (it != mapa.end() ? it->second : 0);
+                    }
+                    archivoPar << "\n";
+                }
+                archivoPar.close();
+
+        // Impresión de tiempos y cálculo de Speed-up
         cout << "RESUMEN DE RESULTADOS:" << endl;
         cout << "Tiempo Serial:   " << tiempoSerial   << " s" << endl;
         cout << "Tiempo Paralelo: " << tiempoParalelo << " s" << endl;
+
         if (tiempoParalelo > 0) {
             double speedup = tiempoSerial / tiempoParalelo;
             cout << "Speed-up:        " << speedup << "x" << endl;
             cout << "Eficiencia:      " << (speedup / (size - 1)) * 100 << "%" << endl;
         }
-        cout << "========================================\n" << endl;
-
-        // Generar CSV paralelo (fuera del tiempo medido)
-        cout << "Generando bolsa_paralela.csv..." << endl;
-
-        set<string> vocabularioParalelo;
-        for (const auto& [nombre, mapa] : conteosParalelos)
-            for (auto const& [palabra, cant] : mapa)
-                vocabularioParalelo.insert(palabra);
-
-        ofstream archivoPar("Resultados/bolsa_paralela.csv");
-        unsigned char bom[] = {0xEF, 0xBB, 0xBF};
-        archivoPar.write((char*)bom, sizeof(bom));
-
-        archivoPar << "Libro";
-        for (const string& p : vocabularioParalelo) archivoPar << "," << p;
-        archivoPar << "\n";
-
-        // Usar el nombre guardado en el par, no el índice del vector
-        for (const auto& [nombre, mapa] : conteosParalelos) {
-            // Quitar prefijo "Libros/" para que el CSV muestre solo el nombre del archivo
-            string nombreCorto = nombre;
-            size_t slash = nombreCorto.rfind('/');
-            if (slash != string::npos) nombreCorto = nombreCorto.substr(slash + 1);
-            archivoPar << nombreCorto;
-            for (const string& p : vocabularioParalelo) {
-                auto it = mapa.find(p);
-                archivoPar << "," << (it != mapa.end() ? it->second : 0);
-            }
-            archivoPar << "\n";
-        }
-        archivoPar.close();
-        cout << "¡Archivo 'bolsa_paralela.csv' listo!" << endl;
 
     } else {
-        // ── CICLO DEL TRABAJADOR ─────────────────────────────────────────────
         while (true) {
             int len;
+            // Cada worker espera instrucción del maestro
             MPI_Recv(&len, 1, MPI_INT, 0, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
             if (len == -1) break; // Señal de fin
 
+            // Recibe el nombre del archivo a procesar
             char* buffer = new char[len + 1];
             MPI_Recv(buffer, len, MPI_CHAR, 0, 11, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             buffer[len] = '\0';
 
+            //El worker cuenta las palabras de su libro y regresa el mapa al maestro
             unordered_map<string, int> miConteo = contarPalabras(string(buffer));
             enviarMapa(miConteo, 0);
             delete[] buffer;
