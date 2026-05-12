@@ -44,6 +44,13 @@ unordered_map<string, int> contarPalabras(string nombreArchivo) {
     return frecuencias;
 }
 
+void descargarLibro(string url, string nombreArchivo) {
+    string ruta    = "Libros/" + nombreArchivo;
+    string comando = "curl -s -L " + url + " -o " + ruta;
+    cout << "Descargando: " << nombreArchivo << "..." << endl;
+    system(comando.c_str());
+}
+
 /* --- FUNCIONES MPI ---
    Todo el mapa se serializa en UN string "palabra:cantidad\n"
    y se manda en 2 mensajes en lugar de 4 por palabra. */
@@ -58,12 +65,7 @@ void enviarMapa(unordered_map<string, int>& conteo, int destino) {
     MPI_Send(serializado.c_str(), len, MPI_CHAR, destino, 1, MPI_COMM_WORLD);
 }
 
-void descargarLibro(string url, string nombreArchivo) {
-    string ruta    = "Libros/" + nombreArchivo;
-    string comando = "curl -s -L " + url + " -o " + ruta;
-    cout << "Descargando: " << nombreArchivo << "..." << endl;
-    system(comando.c_str());
-}
+
 
 /* --- VERSIÓN SERIAL --- */
 
