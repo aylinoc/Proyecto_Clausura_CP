@@ -140,16 +140,13 @@ int main(int argc, char** argv) {
 
     // Lista de libros a descargar y procesar
     vector<pair<string, string>> fuentes = {
-        {"https://www.gutenberg.org/cache/epub/2000/pg2000.txt", "quijote.txt"},
-        {"https://www.gutenberg.org/cache/epub/1342/pg1342.txt", "orgullo.txt"},
-        {"https://www.gutenberg.org/cache/epub/11/pg11.txt",     "alicia.txt"},
-        {"https://www.gutenberg.org/cache/epub/1661/pg1661.txt", "holmes.txt"},
-        {"https://www.gutenberg.org/cache/epub/76/pg76.txt",     "huck.txt"},
-        {"https://www.gutenberg.org/cache/epub/145/pg145.txt",    "middlemarch.txt"},
-        {"https://www.gutenberg.org/cache/epub/2701/pg2701.txt", "moby_dick.txt"},
-        {"https://www.gutenberg.org/cache/epub/1513/pg1513.txt", "romeo_juliet.txt"},
-        {"https://www.gutenberg.org/cache/epub/4300/pg4300.txt", "ulysses.txt"},
-        {"https://www.gutenberg.org/cache/epub/2600/pg2600.txt", "war_and_peace.txt"}
+        {"https://www.gutenberg.org/cache/epub/84/pg84.txt", "libro1"},
+        {"https://www.gutenberg.org/cache/epub/2701/pg2701.txt", "libro2"},
+        {"https://www.gutenberg.org/cache/epub/1342/pg1342.txt", "libro3"},
+        {"https://www.gutenberg.org/cache/epub/1184/pg1184.txt", "libro4"},
+        {"https://www.gutenberg.org/cache/epub/1513/pg1513.txt", "libro5"},
+        {"https://www.gutenberg.org/cache/epub/25851/pg25851.txt", "libro6"},
+        {"https://www.gutenberg.org/cache/epub/2554/pg2554.txt", "libro7"}
     };
 
     vector<string> nombresArchivos;
@@ -203,7 +200,6 @@ int main(int argc, char** argv) {
 
         if (librosEnviados < numLibros) {
             libroMaestro = nombresArchivos[librosEnviados++];
-            cout << "Maestro procesando: " << libroMaestro << endl;
 
             unordered_map<string, int> tmp = contarPalabras(libroMaestro);
             conteoMaestro = map<string, int>(tmp.begin(), tmp.end());
@@ -314,7 +310,6 @@ int main(int argc, char** argv) {
         if (tiempoParalelo > 0) {
             double speedup = tiempoSerial / tiempoParalelo;
             cout << "Speed-up:        " << speedup << "x" << endl;
-            cout << "Eficiencia:      " << (speedup / (size - 1)) * 100 << "%" << endl;
         }
 
     } else {
